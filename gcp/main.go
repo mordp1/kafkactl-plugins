@@ -43,6 +43,9 @@ const gcpTokenHeader = `{"typ":"JWT","alg":"GOOG_OAUTH2_TOKEN"}` //nolint:gosec 
 // refreshBuffer is how long before expiry a cached token is replaced.
 const refreshBuffer = 20 * time.Second
 
+// tokenInfoTimeout bounds the tokeninfo lookup of the principal.
+const tokenInfoTimeout = 10 * time.Second
+
 // tokenProvider produces OAUTHBEARER tokens for Google Cloud Managed Service
 // for Apache Kafka. It is the Go equivalent of Java's
 // com.google.cloud.hosted.kafka.auth.GcpLoginCallbackHandler: a JWT-shaped
@@ -191,7 +194,13 @@ func resolveGCPPrincipal(ctx context.Context, known string, tok *oauth2.Token) (
 			return email, nil
 		}
 	}
-	return tokenInfoEmail(ctx, http.DefaultClient, gcpTokenInfoURL, tok.AccessToken)
+	// kafkactl calls Token() synchronously during the SASL handshake while the
+	// mutex is held, so bound the request to avoid blocking the connection on
+	// a stalled reply.
+	cctx, cancel := context.WithTimeout(ctx, tokenInfoTimeout)
+	defer cancel()
+	client := &http.Client{Timeout: tokenInfoTimeout}
+	return tokenInfoEmail(cctx, client, gcpTokenInfoURL, tok.AccessToken)
 }
 
 // tokenInfoEmail asks Google's tokeninfo endpoint which account owns the
